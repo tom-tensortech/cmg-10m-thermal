@@ -7,8 +7,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <yaml.h>
-#include "thermo.h"
-#include "../vendor/cJSON.h"
+
+#include "config.h"
+#include "hardware.h"
+
+#include "cJSON.h"
 
 /* Load JSON config file */
 static int load_json_config(const char *path, Config *config) {

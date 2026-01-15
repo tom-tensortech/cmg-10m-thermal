@@ -13,7 +13,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <daqhats/daqhats.h>
-#include "thermo.h"
+
+#include "hardware.h"
 
 /* Convert string to TC type enum */
 uint8_t thermo_tc_type_from_string(const char *tc_type_str) {

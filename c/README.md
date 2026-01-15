@@ -263,20 +263,35 @@ Generate an example configuration file.
 ### Project Structure
 ```
 cmg-10m-thermal-c/
-├── src/              # Source files
-│   ├── main.c        # Entry point & argp parsing
-│   ├── commands.c    # Command implementations
-│   ├── hardware.c    # MCC 134 hardware abstraction
-│   ├── config.c      # YAML/JSON config parsing
-│   ├── bridge.c      # Data fusion bridge
-│   └── utils.c       # Utilities & formatting
-├── include/          # Header files
-│   └── thermo.h      # Public API
-├── vendor/           # Third-party libraries
+├── src/                   # Source files
+│   ├── main.c             # Entry point & argp parsing
+│   ├── hardware.c         # MCC 134 hardware abstraction
+│   ├── config.c           # YAML/JSON config parsing
+│   ├── bridge.c           # Data fusion bridge
+│   ├── utils.c            # Utilities & formatting
+│   └── commands/          # Command implementations
+│       ├── list.c         # List command
+│       ├── get.c          # Get command
+│       ├── set.c          # Set command
+│       ├── init_config.c  # Init-config command
+│       └── fuse.c         # Fuse command (in bridge.c)
+├── include/               # Header files
+│   ├── hardware.h         # Hardware abstraction API
+│   ├── config.h           # Configuration API
+│   ├── bridge.h           # Data fusion bridge API
+│   ├── utils.h            # Utility functions API
+│   └── commands/          # Command headers
+│       ├── common.h       # Shared command structures
+│       ├── list.h         # List command API
+│       ├── get.h          # Get command API
+│       ├── set.h          # Set command API
+│       ├── init_config.h  # Init-config command API
+│       └── fuse.h         # Fuse command API
+├── vendor/                # Third-party libraries
 │   ├── cJSON.c
 │   └── cJSON.h
-├── Makefile          # Build system
-└── install_deps.sh   # Dependency installer
+├── Makefile               # Build system
+└── install_deps.sh        # Dependency installer
 ```
 
 ### Build Commands

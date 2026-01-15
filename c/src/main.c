@@ -7,7 +7,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <argp.h>
-#include "thermo.h"
+
+#include "commands/list.h"
+#include "commands/get.h"
+#include "commands/set.h"
+#include "commands/fuse.h"
+#include "commands/init_config.h"
 
 const char *argp_program_version = "thermo-cli 1.0.0";
 const char *argp_program_bug_address = "<support@example.com>";

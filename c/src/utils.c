@@ -7,8 +7,11 @@
 #include <string.h>
 #include <stdarg.h>
 #include <math.h>
-#include "thermo.h"
-#include "../vendor/cJSON.h"
+
+#include "utils.h"
+#include "hardware.h"
+
+#include "cJSON.h"
 
 /* ANSI color codes */
 #define COLOR_RESET   "\033[0m"
@@ -73,14 +76,7 @@ void print_with_color(const char *color_name, const char *format, ...) {
     printf("\n");
 }
 
-/* Create a simple ASCII table */
-typedef struct {
-    char **headers;
-    char ***rows;
-    int num_cols;
-    int num_rows;
-    int *col_widths;
-} Table;
+/* Table implementation */
 
 Table* table_create(int num_cols) {
     Table *table = (Table*)calloc(1, sizeof(Table));

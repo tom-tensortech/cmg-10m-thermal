@@ -12,8 +12,12 @@
 #include <time.h>
 #include <getopt.h>
 #include <daqhats/daqhats.h>
-#include "thermo.h"
-#include "../vendor/cJSON.h"
+
+#include "bridge.h"
+#include "hardware.h"
+#include "config.h"
+
+#include "cJSON.h"
 
 struct FuseBridge {
     ThermalSource *sources;

@@ -7,7 +7,10 @@ LDFLAGS = -ldaqhats -lyaml -lm
 
 # Source files
 SOURCES = src/main.c \
-          src/commands.c \
+          src/commands/list.c \
+          src/commands/get.c \
+          src/commands/set.c \
+          src/commands/init_config.c \
           src/hardware.c \
           src/config.c \
           src/bridge.c \
