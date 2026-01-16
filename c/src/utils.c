@@ -22,6 +22,134 @@
 #define COLOR_MAGENTA "\033[1;35m"
 #define COLOR_CYAN    "\033[1;36m"
 
+/* Data format definitions */
+const DataFormat DATA_FORMATS[5] = {
+    { "Temperature", "degC" },
+    { "ADC", "V" },
+    { "CJC", "degC" },
+    { "Slope", "" },
+    { "Offset", "" }
+};
+
+/* Calculate number of digits before decimal point */
+int count_digits_before_decimal(double value) {
+    if (value == 0.0) return 1;
+    double abs_val = value < 0 ? -value : value;
+    int digits = 0;
+    if (abs_val >= 1.0) {
+        digits = (int)log10(abs_val) + 1;
+    } else {
+        digits = 1;
+    }
+    return digits;
+}
+
+/* Calculate maximum width needed for values across all data */
+void data_format_calculate_max_width(const ThermoData *data_array, int count, int *max_key_len, int *max_value_width, int *max_unit_len) {
+    *max_key_len = 0;
+    *max_unit_len = 0;
+    
+    int max_digits = 1;
+    
+    for (int i = 0; i < count; i++) {
+        if (data_array[i].has_temp) {
+            max_digits = MAX(max_digits, count_digits_before_decimal(data_array[i].temperature));
+            *max_key_len = MAX(*max_key_len, (int)strlen(DATA_FORMATS[TEMP_FORMAT].key));
+            *max_unit_len = MAX(*max_unit_len, (int)strlen(DATA_FORMATS[TEMP_FORMAT].unit));
+        }
+        if (data_array[i].has_adc) {
+            max_digits = MAX(max_digits, count_digits_before_decimal(data_array[i].adc_voltage));
+            *max_key_len = MAX(*max_key_len, (int)strlen(DATA_FORMATS[ADC_FORMAT].key));
+            *max_unit_len = MAX(*max_unit_len, (int)strlen(DATA_FORMATS[ADC_FORMAT].unit));
+        }
+        if (data_array[i].has_cjc) {
+            max_digits = MAX(max_digits, count_digits_before_decimal(data_array[i].cjc_temp));
+            *max_key_len = MAX(*max_key_len, (int)strlen(DATA_FORMATS[CJC_FORMAT].key));
+            *max_unit_len = MAX(*max_unit_len, (int)strlen(DATA_FORMATS[CJC_FORMAT].unit));
+        }
+        if (data_array[i].has_cal_coeffs) {
+            max_digits = MAX(max_digits, count_digits_before_decimal(data_array[i].cal_coeffs.slope));
+            max_digits = MAX(max_digits, count_digits_before_decimal(data_array[i].cal_coeffs.offset));
+            *max_key_len = MAX(*max_key_len, (int)strlen(DATA_FORMATS[CALI_SLOPE_FORMAT].key));
+            *max_key_len = MAX(*max_key_len, (int)strlen(DATA_FORMATS[CALI_OFFSET_FORMAT].key));
+        }
+    }
+    
+    /* Total width: sign(1) + digits + decimal(1) + precision(6) */
+    *max_value_width = max_digits + 8;
+}
+
+/* Print a formatted value line with indentation and alignment */
+void data_format_print_value(const char *label, double value, const char *unit, int indent, int key_width, int value_width, int unit_width) {
+    char *indent_str = malloc(indent + 1);
+    memset(indent_str, ' ', indent);
+    indent_str[indent] = '\0';
+
+    /* Print indentation */
+    printf("%s", indent_str);
+    free(indent_str);
+    
+    /* Print label and value with aligned keys and units */
+    if (unit && unit[0] != '\0') {
+        printf("%-*s: %*.6f %*s\n", key_width, label, value_width, value, unit_width, unit);
+    } else {
+        printf("%-*s: %*.6f\n", key_width, label, value_width, value);
+    }
+}
+
+/* Output all dynamic data fields for a ThermoData structure */
+void data_format_output(const ThermoData *data, int indent, int key_width, int value_width, int unit_width) {
+    char *indent_str = malloc(indent + 1);
+    memset(indent_str, ' ', indent);
+    indent_str[indent] = '\0';
+
+    if (data->has_serial) {
+        printf("%sSerial Number: %s\n", indent_str, data->serial);
+    }
+    
+    if (data->has_cal_date) {
+        printf("%sCalibration Date: %s\n", indent_str, data->cal_date);
+    }
+    
+    if (data->has_cal_coeffs) {
+        printf("%sCalibration Coefficients:\n", indent_str);
+        data_format_print_value(DATA_FORMATS[CALI_SLOPE_FORMAT].key, 
+                               data->cal_coeffs.slope,
+                               DATA_FORMATS[CALI_SLOPE_FORMAT].unit,
+                               indent + 4, key_width, value_width, unit_width);
+        data_format_print_value(DATA_FORMATS[CALI_OFFSET_FORMAT].key,
+                               data->cal_coeffs.offset,
+                               DATA_FORMATS[CALI_OFFSET_FORMAT].unit,
+                               indent + 4, key_width, value_width, unit_width);
+    }
+    
+    if (data->has_interval) {
+        printf("%sUpdate Interval: %d seconds\n", indent_str, data->update_interval);
+    }
+    
+    if (data->has_temp) {
+        data_format_print_value(DATA_FORMATS[TEMP_FORMAT].key,
+                               data->temperature,
+                               DATA_FORMATS[TEMP_FORMAT].unit,
+                               indent, key_width, value_width, unit_width);
+    }
+    
+    if (data->has_adc) {
+        data_format_print_value(DATA_FORMATS[ADC_FORMAT].key,
+                               data->adc_voltage,
+                               DATA_FORMATS[ADC_FORMAT].unit,
+                               indent, key_width, value_width, unit_width);
+    }
+    
+    if (data->has_cjc) {
+        data_format_print_value(DATA_FORMATS[CJC_FORMAT].key,
+                               data->cjc_temp,
+                               DATA_FORMATS[CJC_FORMAT].unit,
+                               indent, key_width, value_width, unit_width);
+    }
+    free(indent_str);
+}
+
 /* Format temperature value for display */
 char* format_temperature(double temp) {
     static char buffer[64];

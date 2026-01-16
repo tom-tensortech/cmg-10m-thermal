@@ -15,7 +15,7 @@
 
 #include "bridge.h"
 #include "hardware.h"
-#include "config.h"
+#include "common.h"
 
 #include "cJSON.h"
 

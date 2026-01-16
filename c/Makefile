@@ -12,7 +12,7 @@ SOURCES = src/main.c \
           src/commands/set.c \
           src/commands/init_config.c \
           src/hardware.c \
-          src/config.c \
+          src/common.c \
           src/bridge.c \
           src/utils.c \
           vendor/cJSON.c

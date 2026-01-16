@@ -1,5 +1,5 @@
 /*
- * Configuration file loading and parsing.
+ * Common functions for configuration and shared structures.
  * Supports both YAML (libyaml) and JSON (cJSON) config files.
  */
 
@@ -8,7 +8,7 @@
 #include <string.h>
 #include <yaml.h>
 
-#include "config.h"
+#include "common.h"
 #include "hardware.h"
 
 #include "cJSON.h"
@@ -117,8 +117,10 @@ static int load_yaml_config(const char *path, Config *config) {
 
     int in_sources = 0;
     int in_source_item = 0;
+    int in_mapping = 0;
     ThermalSource current_source = {0};
     char current_key[64] = {0};
+    int expecting_value = 0;
 
     int done = 0;
     while (!done) {
@@ -131,11 +133,14 @@ static int load_yaml_config(const char *path, Config *config) {
 
         switch (event.type) {
             case YAML_SCALAR_EVENT:
-                if (!in_source_item && strcmp((char*)event.data.scalar.value, "sources") == 0) {
+                if (!in_sources && strcmp((char*)event.data.scalar.value, "sources") == 0) {
                     in_sources = 1;
-                } else if (in_sources && !in_source_item) {
+                } else if (in_source_item && !expecting_value) {
+                    /* This is a key within the source mapping */
                     strncpy(current_key, (char*)event.data.scalar.value, sizeof(current_key) - 1);
-                } else if (in_source_item) {
+                    expecting_value = 1;
+                } else if (in_source_item && expecting_value) {
+                    /* This is a value for the current key */
                     if (strcmp(current_key, "key") == 0) {
                         strncpy(current_source.key, (char*)event.data.scalar.value, sizeof(current_source.key) - 1);
                     } else if (strcmp(current_key, "address") == 0) {
@@ -146,6 +151,13 @@ static int load_yaml_config(const char *path, Config *config) {
                         strncpy(current_source.tc_type, (char*)event.data.scalar.value, sizeof(current_source.tc_type) - 1);
                     }
                     current_key[0] = '\0';
+                    expecting_value = 0;
+                }
+                break;
+
+            case YAML_SEQUENCE_START_EVENT:
+                if (in_sources) {
+                    /* Start of the sources array */
                 }
                 break;
 
@@ -153,6 +165,7 @@ static int load_yaml_config(const char *path, Config *config) {
                 if (in_sources) {
                     in_source_item = 1;
                     memset(&current_source, 0, sizeof(current_source));
+                    expecting_value = 0;
                 }
                 break;
 

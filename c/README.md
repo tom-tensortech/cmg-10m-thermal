@@ -92,6 +92,105 @@ thermo-cli get -T -A --stream 5 --json
 thermo-cli get --temp --clean
 ```
 
+### Read from Multiple Channels (Config File)
+
+```bash
+# Create example config file
+thermo-cli init-config --output sensors.yaml
+
+# Read from multiple channels defined in config
+thermo-cli get --config sensors.yaml --temp
+
+# Multi-channel with JSON output
+thermo-cli get -C sensors.yaml --temp --adc --json
+
+# Stream from multiple channels
+thermo-cli get --config sensors.yaml --temp --stream 5
+
+# Multi-channel with all data types
+thermo-cli get -C sensors.yaml -T -A -J --json
+```
+
+Example config file (`sensors.yaml`):
+```yaml
+sources:
+  - key: MOTOR_TEMP
+    address: 0
+    channel: 0
+    tc_type: K
+  - key: BATTERY_TEMP
+    address: 0
+    channel: 1
+    tc_type: K
+  - key: AMBIENT_TEMP
+    address: 1
+    channel: 0
+    tc_type: T
+```
+
+Example multi-channel JSON output:
+```json
+[
+  {
+    "KEY": "MOTOR_TEMP",
+    "ADDRESS": 0,
+    "CHANNEL": 0,
+    "TEMPERATURE": 45.234567,
+    "ADC": 1.234567
+  },
+  {
+    "KEY": "BATTERY_TEMP",
+    "ADDRESS": 0,
+    "CHANNEL": 1,
+    "TEMPERATURE": 32.123456,
+    "ADC": 0.987654
+  },
+  {
+    "KEY": "AMBIENT_TEMP",
+    "ADDRESS": 1,
+    "CHANNEL": 0,
+    "TEMPERATURE": 25.678901,
+    "ADC": 0.765432
+  }
+]
+```
+
+Example multi-channel table output:
+```
+Reading from 3 sources...
+========================================
+MOTOR_TEMP (Address: 0, Channel: 0):
+    Temperature:  45.234567 °C
+    ADC:          1.234567 V
+BATTERY_TEMP (Address: 0, Channel: 1):
+    Temperature:  32.123456 °C
+    ADC:          0.987654 V
+AMBIENT_TEMP (Address: 1, Channel: 0):
+    Temperature:  25.678901 °C
+    ADC:          0.765432 V
+========================================
+```
+
+Example multi-channel stream output:
+```
+Streaming 3 sources at 1 Hz (Ctrl+C to stop)
+========================================
+MOTOR_TEMP (Address: 0, Channel: 0):
+    Temperature:  45.234567 °C
+    ADC:          1.234567 V
+BATTERY_TEMP (Address: 0, Channel: 1):
+    Temperature:  32.123456 °C
+    ADC:          0.987654 V
+AMBIENT_TEMP (Address: 1, Channel: 0):
+    Temperature:  25.678901 °C
+    ADC:          0.765432 V
+----------------------------------------
+MOTOR_TEMP (Address: 0, Channel: 0):
+    Temperature:  45.456789 °C
+    ADC:          1.245678 V
+...
+```
+
 ### Get Board Information
 
 ```bash
@@ -187,15 +286,22 @@ List all connected MCC 134 boards.
 - `-j, --json` - Output as JSON
 
 #### `get`
-Read data from a specific channel.
+Read data from a specific channel or multiple channels.
+
+**Single-Channel Mode:**
+Uses command-line arguments to read from one channel.
+
+**Multi-Channel Mode:**
+Uses a config file to read from multiple channels simultaneously.
 
 **Options:**
-- `-a, --address NUM` - Board address (0-7) [default: 0]
-- `-c, --channel NUM` - Channel index (0-3) [default: 0]
-- `-t, --tc-type TYPE` - Thermocouple type (K,J,T,E,R,S,B,N) [default: K]
+- `-C, --config FILE` - Path to YAML/JSON config file (multi-channel mode)
+- `-a, --address NUM` - Board address (0-7) [default: 0] (single-channel mode)
+- `-c, --channel NUM` - Channel index (0-3) [default: 0] (single-channel mode)
+- `-t, --tc-type TYPE` - Thermocouple type (K,J,T,E,R,S,B,N) [default: K] (single-channel mode)
 - `-s, --serial` - Get serial number
 - `-D, --cali-date` - Get calibration date
-- `-C, --cali-coeffs` - Get calibration coefficients
+- `-O, --cali-coeffs` - Get calibration coefficients
 - `-T, --temp` - Get temperature (default)
 - `-A, --adc` - Get raw ADC voltage
 - `-J, --cjc` - Get CJC temperature
@@ -204,13 +310,20 @@ Read data from a specific channel.
 - `-l, --clean` - Simple output without alignment/formatting
 - `-j, --json` - Output as JSON
 
+**Notes:**
+- Cannot specify both `--config` and `--address/--channel`
+- In multi-channel mode, all data flags apply to ALL channels
+- Multi-channel JSON output is an array of objects
+- Multi-channel table output shows each channel sequentially
+
 **Stream Mode:**
 - Streams dynamic data (temperature, ADC, CJC) continuously at the specified Hz rate
 - Static data (serial, calibration, update interval) is displayed once at the beginning
 - Use Ctrl+C to stop streaming
 - In clean mode, no separator lines or alignment are used
+- Works with both single and multi-channel modes
 
-**Examples:**
+**Single-Channel Examples:**
 ```bash
 # Single reading with formatted output
 thermo-cli get -T -A
@@ -223,6 +336,18 @@ thermo-cli get -s -T -A --stream 5
 
 # Clean mode (simple output)
 thermo-cli get -T --clean
+```
+
+**Multi-Channel Examples:**
+```bash
+# Read from multiple channels
+thermo-cli get --config sensors.yaml --temp
+
+# Multi-channel with JSON array output
+thermo-cli get -C sensors.yaml -T -A --json
+
+# Stream multiple channels
+thermo-cli get -C sensors.yaml --temp --stream 5 --json
 ```
 
 #### `set`

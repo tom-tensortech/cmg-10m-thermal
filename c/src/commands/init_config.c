@@ -9,7 +9,7 @@
 #include <getopt.h>
 
 #include "commands/init_config.h"
-#include "config.h"
+#include "common.h"
 #include "hardware.h"
 
 /* Command: init-config - Generate example configuration file */

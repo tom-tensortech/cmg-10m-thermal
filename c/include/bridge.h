@@ -6,7 +6,7 @@
 #ifndef BRIDGE_H
 #define BRIDGE_H
 
-#include "config.h"
+#include "common.h"
 
 /* Opaque bridge structure */
 typedef struct FuseBridge FuseBridge;

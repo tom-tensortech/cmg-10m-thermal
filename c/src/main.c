@@ -22,7 +22,7 @@ static char doc[] =
     "thermo-cli -- MCC 134 Thermocouple Interface and Data Fuser\n\n"
     "COMMANDS:\n"
     "  list             List all connected MCC 134 boards\n"
-    "  get              Read data from a specific channel\n"
+    "  get              Read data from single or multiple channels\n"
     "  set              Configure channel parameters\n"
     "  fuse             Fuse thermal data into cmg-cli output\n"
     "  init-config      Generate an example configuration file\n";
@@ -43,7 +43,7 @@ typedef struct {
 /* Available commands */
 static Command commands[] = {
     {"list", "List all connected MCC 134 boards", cmd_list},
-    {"get", "Read data from a specific channel", cmd_get},
+    {"get", "Read data from single or multiple channels", cmd_get},
     {"set", "Configure channel parameters", cmd_set},
     {"fuse", "Fuse thermal data into cmg-cli output", cmd_fuse},
     {"init-config", "Generate example configuration file", cmd_init_config},
@@ -79,20 +79,35 @@ static void print_command_help(const char *cmd_name) {
         printf("  -j, --json          Output as JSON\n");
     } else if (strcmp(cmd_name, "get") == 0) {
         printf("Usage: thermo-cli get [OPTIONS]\n\n");
-        printf("Read data from a specific channel.\n\n");
+        printf("Read data from a single channel or multiple channels.\n\n");
+        printf("Single-Channel Mode:\n");
+        printf("  Use --address and --channel to read from one channel.\n\n");
+        printf("Multi-Channel Mode:\n");
+        printf("  Use --config to read from multiple channels defined in a YAML/JSON file.\n\n");
         printf("Options:\n");
-        printf("  -a, --address NUM        Board address (0-7) [default: 0]\n");
-        printf("  -c, --channel NUM        Channel index (0-3) [default: 0]\n");
-        printf("  -t, --tc-type TYPE       Thermocouple type (K,J,T,E,R,S,B,N) [default: K]\n");
+        printf("  -C, --config FILE        Path to YAML/JSON config file (multi-channel mode)\n");
+        printf("  -a, --address NUM        Board address (0-7) [default: 0] (single-channel mode)\n");
+        printf("  -c, --channel NUM        Channel index (0-3) [default: 0] (single-channel mode)\n");
+        printf("  -t, --tc-type TYPE       Thermocouple type (K,J,T,E,R,S,B,N) [default: K] (single-channel)\n");
         printf("  -s, --serial             Get serial number\n");
         printf("  -D, --cali-date          Get calibration date\n");
-        printf("  -C, --cali-coeffs        Get calibration coefficients\n");
+        printf("  -O, --cali-coeffs        Get calibration coefficients\n");
         printf("  -T, --temp               Get temperature (default if nothing else specified)\n");
         printf("  -A, --adc                Get raw ADC voltage\n");
         printf("  -J, --cjc                Get CJC temperature\n");
         printf("  -i, --update-interval    Get update interval\n");
         printf("  -S, --stream HZ          Stream readings at specified frequency (Hz)\n");
-        printf("  -j, --json               Output as JSON\n");
+        printf("  -l, --clean              Simple output without alignment/formatting\n");
+        printf("  -j, --json               Output as JSON\n\n");
+        printf("Notes:\n");
+        printf("  - Cannot specify both --config and --address/--channel\n");
+        printf("  - In multi-channel mode, all data flags apply to ALL channels\n");
+        printf("  - Multi-channel JSON output is an array of objects\n\n");
+        printf("Examples:\n");
+        printf("  thermo-cli get --temp                              # Single channel (default addr 0, ch 0)\n");
+        printf("  thermo-cli get -a 0 -c 1 -T -A --json              # Single channel with JSON output\n");
+        printf("  thermo-cli get --config sensors.yaml --temp        # Multiple channels from config\n");
+        printf("  thermo-cli get -C sensors.yaml -T -A --stream 5    # Stream multiple channels at 5 Hz\n");
     } else if (strcmp(cmd_name, "set") == 0) {
         printf("Usage: thermo-cli set [OPTIONS]\n\n");
         printf("Configure channel parameters.\n\n");
