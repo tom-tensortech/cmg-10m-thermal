@@ -13,6 +13,90 @@
 
 #include "cJSON.h"
 
+/* ============================================================================
+ * ADAPTER FUNCTIONS (for gradual migration)
+ * ============================================================================ */
+
+/* Initialize a ChannelReading structure */
+void channel_reading_init(ChannelReading *reading, uint8_t address, uint8_t channel) {
+    reading->address = address;
+    reading->channel = channel;
+    reading->temperature = 0.0;
+    reading->adc_voltage = 0.0;
+    reading->cjc_temp = 0.0;
+    reading->has_temp = 0;
+    reading->has_adc = 0;
+    reading->has_cjc = 0;
+}
+
+/* Initialize a BoardInfo structure */
+void board_info_init(BoardInfo *info, uint8_t address) {
+    info->address = address;
+    info->serial[0] = '\0';
+    info->update_interval = DEFAULT_UPDATE_INTERVAL;
+    for (int i = 0; i < MCC134_NUM_CHANNELS; i++) {
+        info->channels[i].cal_date[0] = '\0';
+        info->channels[i].cal_coeffs.slope = DEFAULT_CALIBRATION_SLOPE;
+        info->channels[i].cal_coeffs.offset = DEFAULT_CALIBRATION_OFFSET;
+        info->channels[i].tc_type = TC_TYPE_K;
+    }
+}
+
+/* Convert ThermoData to ChannelReading (extracts dynamic data only) */
+void thermo_data_to_reading(const ThermoData *data, ChannelReading *reading) {
+    reading->address = (uint8_t)data->address;
+    reading->channel = (uint8_t)data->channel;
+    reading->temperature = data->temperature;
+    reading->adc_voltage = data->adc_voltage;
+    reading->cjc_temp = data->cjc_temp;
+    reading->has_temp = data->has_temp ? 1 : 0;
+    reading->has_adc = data->has_adc ? 1 : 0;
+    reading->has_cjc = data->has_cjc ? 1 : 0;
+}
+
+/* Convert ChannelReading back to ThermoData (for functions that still need ThermoData) */
+void reading_to_thermo_data(const ChannelReading *reading, ThermoData *data) {
+    data->address = reading->address;
+    data->channel = reading->channel;
+    data->temperature = reading->temperature;
+    data->adc_voltage = reading->adc_voltage;
+    data->cjc_temp = reading->cjc_temp;
+    data->has_temp = reading->has_temp;
+    data->has_adc = reading->has_adc;
+    data->has_cjc = reading->has_cjc;
+    /* Static fields are not set - caller should handle separately */
+    data->has_serial = 0;
+    data->has_cal_date = 0;
+    data->has_cal_coeffs = 0;
+    data->has_interval = 0;
+}
+
+/* Extract BoardInfo from ThermoData (for a single channel) */
+void thermo_data_to_board_info(const ThermoData *data, BoardInfo *info, int channel) {
+    info->address = (uint8_t)data->address;
+    if (data->has_serial) {
+        strncpy(info->serial, data->serial, sizeof(info->serial) - 1);
+        info->serial[sizeof(info->serial) - 1] = '\0';
+    }
+    if (data->has_interval) {
+        info->update_interval = data->update_interval;
+    }
+    if (channel >= 0 && channel < MCC134_NUM_CHANNELS) {
+        if (data->has_cal_date) {
+            strncpy(info->channels[channel].cal_date, data->cal_date, 
+                    sizeof(info->channels[channel].cal_date) - 1);
+            info->channels[channel].cal_date[sizeof(info->channels[channel].cal_date) - 1] = '\0';
+        }
+        if (data->has_cal_coeffs) {
+            info->channels[channel].cal_coeffs = data->cal_coeffs;
+        }
+    }
+}
+
+/* ============================================================================
+ * CONFIGURATION FUNCTIONS
+ * ============================================================================ */
+
 /* Load JSON config file */
 static int load_json_config(const char *path, Config *config) {
     FILE *fp = fopen(path, "r");
