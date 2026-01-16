@@ -127,16 +127,37 @@ static cJSON* get_thermal_data(FuseBridge *bridge) {
     
     for (int i = 0; i < bridge->source_count; i++) {
         ThermalSource *src = &bridge->sources[i];
-        double temp;
+        double temp, adc, cjc;
+        
+        /* Create a sub-object for each source */
+        cJSON *source_data = cJSON_CreateObject();
         
         /* Read temperature (board is already open with TC type set) */
-        int result = mcc134_t_in_read(src->address, src->channel, &temp);
-        if (result == RESULT_SUCCESS) {
-            cJSON_AddNumberToObject(data, src->key, temp);
+        int temp_result = mcc134_t_in_read(src->address, src->channel, &temp);
+        if (temp_result == RESULT_SUCCESS) {
+            cJSON_AddNumberToObject(source_data, "TEMP", temp);
         } else {
-            /* On error, add NaN */
-            cJSON_AddNumberToObject(data, src->key, 0.0/0.0);
+            cJSON_AddNumberToObject(source_data, "TEMP", 0.0/0.0);
         }
+        
+        /* Read ADC voltage */
+        int adc_result = mcc134_a_in_read(src->address, src->channel, OPTS_DEFAULT, &adc);
+        if (adc_result == RESULT_SUCCESS) {
+            cJSON_AddNumberToObject(source_data, "ADC", adc);
+        } else {
+            cJSON_AddNumberToObject(source_data, "ADC", 0.0/0.0);
+        }
+        
+        /* Read CJC temperature */
+        int cjc_result = mcc134_cjc_read(src->address, src->channel, &cjc);
+        if (cjc_result == RESULT_SUCCESS) {
+            cJSON_AddNumberToObject(source_data, "CJC", cjc);
+        } else {
+            cJSON_AddNumberToObject(source_data, "CJC", 0.0/0.0);
+        }
+        
+        /* Add the source data object to the main data object */
+        cJSON_AddItemToObject(data, src->key, source_data);
     }
     
     return data;
