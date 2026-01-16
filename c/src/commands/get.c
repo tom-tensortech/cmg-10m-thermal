@@ -15,6 +15,8 @@
 #include "common.h"
 #include "utils.h"
 #include "signals.h"
+#include "board_manager.h"
+#include "json_utils.h"
 
 #include "cJSON.h"
 
@@ -213,49 +215,8 @@ int thermo_data_collect(ThermoData *data, int get_serial, int get_cal_date,
 
 /* Output data in JSON format */
 void thermo_data_output_json(const ThermoData *data, int include_address_channel) {
-    cJSON *root = cJSON_CreateObject();
-    
-    if (include_address_channel) {
-        cJSON_AddNumberToObject(root, "ADDRESS", data->address);
-        cJSON_AddNumberToObject(root, "CHANNEL", data->channel);
-    }
-    
-    if (data->has_serial) {
-        cJSON_AddStringToObject(root, "SERIAL", data->serial);
-    }
-    
-    if (data->has_cal_date || data->has_cal_coeffs) {
-        cJSON *cal = cJSON_AddObjectToObject(root, "CALIBRATION");
-        if (data->has_cal_date) {
-            cJSON_AddStringToObject(cal, "DATE", data->cal_date);
-        }
-        if (data->has_cal_coeffs) {
-            cJSON_AddNumberToObject(cal, "SLOPE", data->cal_coeffs.slope);
-            cJSON_AddNumberToObject(cal, "OFFSET", data->cal_coeffs.offset);
-        }
-    }
-    
-    if (data->has_interval) {
-        cJSON_AddNumberToObject(root, "UPDATE_INTERVAL", data->update_interval);
-    }
-    
-    if (data->has_temp) {
-        cJSON_AddNumberToObject(root, "TEMPERATURE", data->temperature);
-    }
-    
-    if (data->has_adc) {
-        cJSON_AddNumberToObject(root, "ADC", data->adc_voltage);
-    }
-    
-    if (data->has_cjc) {
-        cJSON_AddNumberToObject(root, "CJC", data->cjc_temp);
-    }
-    
-    char *json_str = cJSON_PrintUnformatted(root);
-    printf("%s\n", json_str);
-    fflush(stdout);
-    free(json_str);
-    cJSON_Delete(root);
+    cJSON *root = thermo_data_to_json(data, include_address_channel);
+    json_print_and_free(root, 0);
 }
 
 /* Output data in human-readable format */
@@ -302,13 +263,11 @@ void thermo_data_split(const ThermoData *data, ThermoData *static_data, ThermoDa
     }
 }
 
-/* Collect data from multiple channels */
+/* Collect data from multiple channels using BoardManager */
 static int collect_channels(ThermalSource *sources, int source_count, ThermoData **data_out,
                            int get_serial, int get_cal_date, int get_cal_coeffs,
-                           int get_temp, int get_adc, int get_cjc, int get_interval) {
-    /* Track which boards are already open */
-    uint8_t opened[8] = {0};
-    
+                           int get_temp, int get_adc, int get_cjc, int get_interval,
+                           BoardManager *mgr_out) {
     /* Allocate array for results */
     ThermoData *data_array = (ThermoData*)calloc(source_count, sizeof(ThermoData));
     if (!data_array) {
@@ -316,46 +275,14 @@ static int collect_channels(ThermalSource *sources, int source_count, ThermoData
         return THERMO_ERROR;
     }
     
-    /* Open all unique boards and configure update intervals */
-    for (int i = 0; i < source_count; i++) {
-        uint8_t addr = sources[i].address;
-        if (!opened[addr]) {
-            if (thermo_open(addr) != THERMO_SUCCESS) {
-                fprintf(stderr, "Error: Failed to open board at address %d\n", addr);
-                /* Close previously opened boards */
-                for (int j = 0; j < 8; j++) {
-                    if (opened[j]) thermo_close(j);
-                }
-                free(data_array);
-                return THERMO_ERROR;
-            }
-            opened[addr] = 1;
-            
-            /* Apply update interval if it differs from default */
-            if (sources[i].update_interval > 0 && sources[i].update_interval != DEFAULT_UPDATE_INTERVAL) {
-                DEBUG_PRINT("Setting update interval for address %d to %d", addr, sources[i].update_interval);
-                if (thermo_set_update_interval(addr, (uint8_t)sources[i].update_interval) != THERMO_SUCCESS) {
-                    fprintf(stderr, "Warning: Failed to set update interval for address %d\n", addr);
-                }
-            }
-        }
+    /* Initialize BoardManager and open all boards */
+    if (board_manager_init(mgr_out, sources, source_count) != THERMO_SUCCESS) {
+        free(data_array);
+        return THERMO_ERROR;
     }
     
-    /* Configure calibration coefficients for each channel */
-    for (int i = 0; i < source_count; i++) {
-        if (sources[i].cal_coeffs.slope != DEFAULT_CALIBRATION_SLOPE || 
-            sources[i].cal_coeffs.offset != DEFAULT_CALIBRATION_OFFSET) {
-            DEBUG_PRINT("Setting calibration coeffs for address %d, channel %d: slope=%.6f, offset=%.6f",
-                        sources[i].address, sources[i].channel,
-                        sources[i].cal_coeffs.slope, sources[i].cal_coeffs.offset);
-            if (thermo_set_calibration_coeffs(sources[i].address, sources[i].channel, 
-                                             sources[i].cal_coeffs.slope, 
-                                             sources[i].cal_coeffs.offset) != THERMO_SUCCESS) {
-                fprintf(stderr, "Warning: Failed to set calibration coefficients for address %d, channel %d\n",
-                        sources[i].address, sources[i].channel);
-            }
-        }
-    }
+    /* Configure calibration and TC types */
+    board_manager_configure(mgr_out);
     
     DEBUG_PRINT("Beginning data collection for %d sources", source_count);
     
@@ -377,124 +304,10 @@ static int collect_channels(ThermalSource *sources, int source_count, ThermoData
     return THERMO_SUCCESS;
 }
 
-/* Close all boards used by sources */
-static void close_boards(ThermalSource *sources, int source_count) {
-    uint8_t closed[8] = {0};
-    for (int i = 0; i < source_count; i++) {
-        uint8_t addr = sources[i].address;
-        if (!closed[addr]) {
-            thermo_close(addr);
-            closed[addr] = 1;
-        }
-    }
-}
-
-/* Output single channel data in JSON format with key */
-static void output_single_json_with_key(const ThermoData *data, const char *key) {
-    cJSON *root = cJSON_CreateObject();
-    
-    if (key && key[0] != '\0') {
-        cJSON_AddStringToObject(root, "KEY", key);
-    }
-    cJSON_AddNumberToObject(root, "ADDRESS", data->address);
-    cJSON_AddNumberToObject(root, "CHANNEL", data->channel);
-    
-    if (data->has_serial) {
-        cJSON_AddStringToObject(root, "SERIAL", data->serial);
-    }
-    
-    if (data->has_cal_date || data->has_cal_coeffs) {
-        cJSON *cal = cJSON_AddObjectToObject(root, "CALIBRATION");
-        if (data->has_cal_date) {
-            cJSON_AddStringToObject(cal, "DATE", data->cal_date);
-        }
-        if (data->has_cal_coeffs) {
-            cJSON_AddNumberToObject(cal, "SLOPE", data->cal_coeffs.slope);
-            cJSON_AddNumberToObject(cal, "OFFSET", data->cal_coeffs.offset);
-        }
-    }
-    
-    if (data->has_interval) {
-        cJSON_AddNumberToObject(root, "UPDATE_INTERVAL", data->update_interval);
-    }
-    
-    if (data->has_temp) {
-        cJSON_AddNumberToObject(root, "TEMPERATURE", data->temperature);
-    }
-    
-    if (data->has_adc) {
-        cJSON_AddNumberToObject(root, "ADC", data->adc_voltage);
-    }
-    
-    if (data->has_cjc) {
-        cJSON_AddNumberToObject(root, "CJC", data->cjc_temp);
-    }
-    
-    char *json_str = cJSON_PrintUnformatted(root);
-    printf("%s\n", json_str);
-    fflush(stdout);
-    free(json_str);
-    cJSON_Delete(root);
-}
-
 /* Output multiple channels in JSON format */
 static void output_channels_json(ThermoData *data_array, int count, ThermalSource *sources) {
-    if (count == 1) {
-        /* Single channel - use existing format */
-        thermo_data_output_json(&data_array[0], 1);
-    } else {
-        /* Multiple channels - output as array */
-        cJSON *root = cJSON_CreateArray();
-        
-        for (int i = 0; i < count; i++) {
-            cJSON *item = cJSON_CreateObject();
-            
-            if (sources[i].key[0] != '\0') {
-                cJSON_AddStringToObject(item, "KEY", sources[i].key);
-            }
-            cJSON_AddNumberToObject(item, "ADDRESS", data_array[i].address);
-            cJSON_AddNumberToObject(item, "CHANNEL", data_array[i].channel);
-            
-            if (data_array[i].has_serial) {
-                cJSON_AddStringToObject(item, "SERIAL", data_array[i].serial);
-            }
-            
-            if (data_array[i].has_cal_date || data_array[i].has_cal_coeffs) {
-                cJSON *cal = cJSON_AddObjectToObject(item, "CALIBRATION");
-                if (data_array[i].has_cal_date) {
-                    cJSON_AddStringToObject(cal, "DATE", data_array[i].cal_date);
-                }
-                if (data_array[i].has_cal_coeffs) {
-                    cJSON_AddNumberToObject(cal, "SLOPE", data_array[i].cal_coeffs.slope);
-                    cJSON_AddNumberToObject(cal, "OFFSET", data_array[i].cal_coeffs.offset);
-                }
-            }
-            
-            if (data_array[i].has_interval) {
-                cJSON_AddNumberToObject(item, "UPDATE_INTERVAL", data_array[i].update_interval);
-            }
-            
-            if (data_array[i].has_temp) {
-                cJSON_AddNumberToObject(item, "TEMPERATURE", data_array[i].temperature);
-            }
-            
-            if (data_array[i].has_adc) {
-                cJSON_AddNumberToObject(item, "ADC", data_array[i].adc_voltage);
-            }
-            
-            if (data_array[i].has_cjc) {
-                cJSON_AddNumberToObject(item, "CJC", data_array[i].cjc_temp);
-            }
-            
-            cJSON_AddItemToArray(root, item);
-        }
-        
-        char *json_str = cJSON_PrintUnformatted(root);
-        printf("%s\n", json_str);
-        fflush(stdout);
-        free(json_str);
-        cJSON_Delete(root);
-    }
+    cJSON *root = thermo_data_array_to_json(data_array, count, sources);
+    json_print_and_free(root, 0);
 }
 
 /* Output multiple channels in table format */
@@ -551,7 +364,7 @@ static void output_channels_table(ThermoData *data_array, int count, ThermalSour
     }
 }
 
-/* Stream data from multiple channels */
+/* Stream data from multiple channels using BoardManager */
 static int stream_channels(ThermalSource *sources, int source_count,
                           int get_serial, int get_cal_date, int get_cal_coeffs,
                           int get_temp, int get_adc, int get_cjc, int get_interval,
@@ -561,51 +374,25 @@ static int stream_channels(ThermalSource *sources, int source_count,
     sleep_time.tv_sec = sleep_us / 1000000;
     sleep_time.tv_nsec = (sleep_us % 1000000) * 1000;
     
-    /* Track which boards are already open */
-    uint8_t opened[8] = {0};
-    
-    /* Open all unique boards and configure settings */
-    for (int i = 0; i < source_count; i++) {
-        uint8_t addr = sources[i].address;
-        if (!opened[addr]) {
-            if (thermo_open(addr) != THERMO_SUCCESS) {
-                fprintf(stderr, "Error: Failed to open board at address %d\n", addr);
-                /* Close previously opened boards */
-                for (int j = 0; j < 8; j++) {
-                    if (opened[j]) thermo_close(j);
-                }
-                return 1;
-            }
-            opened[addr] = 1;
-            
-            /* Apply update interval if it differs from default */
-            if (sources[i].update_interval > 0 && sources[i].update_interval != DEFAULT_UPDATE_INTERVAL) {
-                if (thermo_set_update_interval(addr, (uint8_t)sources[i].update_interval) != THERMO_SUCCESS) {
-                    fprintf(stderr, "Warning: Failed to set update interval for address %d\n", addr);
-                }
-            }
-        }
+    /* Initialize BoardManager */
+    BoardManager mgr;
+    if (board_manager_init(&mgr, sources, source_count) != THERMO_SUCCESS) {
+        return 1;
     }
     
-    /* Configure calibration coefficients for each channel */
-    for (int i = 0; i < source_count; i++) {
-        if (sources[i].cal_coeffs.slope != DEFAULT_CALIBRATION_SLOPE || 
-            sources[i].cal_coeffs.offset != DEFAULT_CALIBRATION_OFFSET) {
-            if (thermo_set_calibration_coeffs(sources[i].address, sources[i].channel, 
-                                             sources[i].cal_coeffs.slope, 
-                                             sources[i].cal_coeffs.offset) != THERMO_SUCCESS) {
-                fprintf(stderr, "Warning: Failed to set calibration coefficients for address %d, channel %d\n",
-                        sources[i].address, sources[i].channel);
-            }
-        }
-    }
+    /* Configure calibration and TC types */
+    board_manager_configure(&mgr);
     
-    /* Print header and static data once */
+    /* Print header and static data once (boards already open) */
     if (get_serial || get_cal_date || get_cal_coeffs || get_interval) {
-        ThermoData *static_data;
-        if (collect_channels(sources, source_count, &static_data,
-                           get_serial, get_cal_date, get_cal_coeffs,
-                           0, 0, 0, get_interval) == THERMO_SUCCESS) {
+        ThermoData *static_data = (ThermoData*)calloc(source_count, sizeof(ThermoData));
+        if (static_data) {
+            /* Collect static data directly (boards already open and configured) */
+            for (int i = 0; i < source_count; i++) {
+                thermo_data_init(&static_data[i], sources[i].address, sources[i].channel);
+                thermo_data_collect(&static_data[i], get_serial, get_cal_date, get_cal_coeffs,
+                                   0, 0, 0, get_interval, &sources[i]);
+            }
             if (json_output) {
                 output_channels_json(static_data, source_count, sources);
             } else {
@@ -644,7 +431,7 @@ static int stream_channels(ThermalSource *sources, int source_count,
         ThermoData *data_array = (ThermoData*)calloc(source_count, sizeof(ThermoData));
         if (!data_array) {
             fprintf(stderr, "Error: Failed to allocate memory\n");
-            close_boards(sources, source_count);
+            board_manager_close(&mgr);
             return 1;
         }
         
@@ -705,7 +492,7 @@ static int stream_channels(ThermalSource *sources, int source_count,
         nanosleep(&sleep_time, NULL);
     }
     
-    close_boards(sources, source_count);
+    board_manager_close(&mgr);
     return 0;
 }
 
@@ -837,9 +624,11 @@ int cmd_get(int argc, char **argv) {
     } else {
         /* Single reading mode */
         ThermoData *data_array;
+        BoardManager mgr;
         if (collect_channels(sources, source_count, &data_array,
                            get_serial, get_cal_date, get_cal_coeffs,
-                           get_temp, get_adc, get_cjc, get_interval) == THERMO_SUCCESS) {
+                           get_temp, get_adc, get_cjc, get_interval,
+                           &mgr) == THERMO_SUCCESS) {
             DEBUG_PRINT("Data collection complete.");
             if (json_output) {
                 output_channels_json(data_array, source_count, sources);
@@ -852,7 +641,7 @@ int cmd_get(int argc, char **argv) {
             result = 1;
         }
         
-        close_boards(sources, source_count);
+        board_manager_close(&mgr);
     }
     
     if (config_path) {

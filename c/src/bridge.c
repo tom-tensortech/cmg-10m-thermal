@@ -17,6 +17,7 @@
 #include "hardware.h"
 #include "common.h"
 #include "signals.h"
+#include "board_manager.h"
 
 #include "cJSON.h"
 
@@ -25,6 +26,7 @@ struct FuseBridge {
     int source_count;
     char **args;
     int arg_count;
+    BoardManager board_mgr;
     int boards_initialized;
     char time_format[64];
 };
@@ -53,11 +55,9 @@ FuseBridge* bridge_create(ThermalSource *sources, int source_count, char **args,
 void bridge_free(FuseBridge *bridge) {
     if (!bridge) return;
     
-    /* Close any open boards */
+    /* Close any open boards via BoardManager */
     if (bridge->boards_initialized) {
-        for (int i = 0; i < bridge->source_count; i++) {
-            mcc134_close(bridge->sources[i].address);
-        }
+        board_manager_close(&bridge->board_mgr);
     }
     
     if (bridge->sources) free(bridge->sources);
@@ -69,51 +69,15 @@ void bridge_free(FuseBridge *bridge) {
     free(bridge);
 }
 
-/* Initialize boards for continuous reading */
+/* Initialize boards for continuous reading using BoardManager */
 static int bridge_init_boards(FuseBridge *bridge) {
-    /* Track which addresses we've already opened */
-    uint8_t opened[8] = {0};
-    
-    for (int i = 0; i < bridge->source_count; i++) {
-        ThermalSource *src = &bridge->sources[i];
-        
-        if (!opened[src->address]) {
-            /* Open the board */
-            int result = mcc134_open(src->address);
-            if (result != RESULT_SUCCESS) {
-                fprintf(stderr, "Error: Failed to open board at address %d\n", src->address);
-                return -1;
-            }
-            opened[src->address] = 1;
-            
-            /* Apply update interval if it differs from default */
-            if (src->update_interval > 0 && src->update_interval != DEFAULT_UPDATE_INTERVAL) {
-                if (thermo_set_update_interval(src->address, (uint8_t)src->update_interval) != THERMO_SUCCESS) {
-                    fprintf(stderr, "Warning: Failed to set update interval for address %d\n", src->address);
-                }
-            }
-        }
-        
-        /* Apply calibration coefficients if they differ from defaults */
-        if (src->cal_coeffs.slope != DEFAULT_CALIBRATION_SLOPE || 
-            src->cal_coeffs.offset != DEFAULT_CALIBRATION_OFFSET) {
-            if (thermo_set_calibration_coeffs(src->address, src->channel, 
-                                             src->cal_coeffs.slope, 
-                                             src->cal_coeffs.offset) != THERMO_SUCCESS) {
-                fprintf(stderr, "Warning: Failed to set calibration coefficients for address %d, channel %d\n",
-                        src->address, src->channel);
-            }
-        }
-        
-        /* Set thermocouple type for this channel */
-        uint8_t tc_type = thermo_tc_type_from_string(src->tc_type);
-        int result = mcc134_tc_type_write(src->address, src->channel, tc_type);
-        if (result != RESULT_SUCCESS) {
-            fprintf(stderr, "Error: Failed to set TC type for addr %d ch %d\n", 
-                    src->address, src->channel);
-            return -1;
-        }
+    /* Initialize BoardManager and open all boards */
+    if (board_manager_init(&bridge->board_mgr, bridge->sources, bridge->source_count) != THERMO_SUCCESS) {
+        return -1;
     }
+    
+    /* Configure calibration and TC types */
+    board_manager_configure(&bridge->board_mgr);
     
     bridge->boards_initialized = 1;
     

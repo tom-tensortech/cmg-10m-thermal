@@ -31,6 +31,8 @@ SOURCES = src/main.c \
           src/hardware.c \
           src/common.c \
           src/bridge.c \
+          src/board_manager.c \
+          src/json_utils.c \
           src/utils.c \
           src/signals.c \
           vendor/cJSON.c
