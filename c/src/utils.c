@@ -165,6 +165,117 @@ void data_format_output(const ThermoData *data, int indent, int key_width, int v
     free(indent_str);
 }
 
+/* ============================================================================
+ * NEW FORMATTING API for ChannelReading/BoardInfo
+ * ============================================================================ */
+
+/* Calculate maximum width needed for values across all readings */
+void reading_format_calculate_max_width(const ChannelReading *readings, const BoardInfo *board_infos,
+                                        const ThermalSource *sources, int count,
+                                        int *max_key_len, int *max_value_width, int *max_unit_len) {
+    *max_key_len = 0;
+    *max_unit_len = 0;
+    
+    int max_digits = 1;
+    
+    for (int i = 0; i < count; i++) {
+        const ChannelReading *reading = &readings[i];
+        const BoardInfo *info = board_infos ? &board_infos[reading->address] : NULL;
+        
+        if (reading->has_temp) {
+            max_digits = MAX(max_digits, count_digits_before_decimal(reading->temperature));
+            *max_key_len = MAX(*max_key_len, (int)strlen(DATA_FORMATS[TEMP_FORMAT].key));
+            *max_unit_len = MAX(*max_unit_len, (int)strlen(DATA_FORMATS[TEMP_FORMAT].unit));
+        }
+        if (reading->has_adc) {
+            max_digits = MAX(max_digits, count_digits_before_decimal(reading->adc_voltage));
+            *max_key_len = MAX(*max_key_len, (int)strlen(DATA_FORMATS[ADC_FORMAT].key));
+            *max_unit_len = MAX(*max_unit_len, (int)strlen(DATA_FORMATS[ADC_FORMAT].unit));
+        }
+        if (reading->has_cjc) {
+            max_digits = MAX(max_digits, count_digits_before_decimal(reading->cjc_temp));
+            *max_key_len = MAX(*max_key_len, (int)strlen(DATA_FORMATS[CJC_FORMAT].key));
+            *max_unit_len = MAX(*max_unit_len, (int)strlen(DATA_FORMATS[CJC_FORMAT].unit));
+        }
+        if (info && reading->channel < MCC134_NUM_CHANNELS) {
+            CalibrationInfo *cal = &info->channels[reading->channel].cal_coeffs;
+            if (cal->slope != DEFAULT_CALIBRATION_SLOPE || cal->offset != DEFAULT_CALIBRATION_OFFSET) {
+                max_digits = MAX(max_digits, count_digits_before_decimal(cal->slope));
+                max_digits = MAX(max_digits, count_digits_before_decimal(cal->offset));
+                *max_key_len = MAX(*max_key_len, (int)strlen(DATA_FORMATS[CALI_SLOPE_FORMAT].key));
+                *max_key_len = MAX(*max_key_len, (int)strlen(DATA_FORMATS[CALI_OFFSET_FORMAT].key));
+            }
+        }
+    }
+    
+    /* Total width: sign(1) + digits + decimal(1) + precision(6) */
+    *max_value_width = max_digits + 8;
+}
+
+/* Output all data for a ChannelReading with optional BoardInfo */
+void reading_format_output(const ChannelReading *reading, const BoardInfo *info,
+                          const ThermalSource *source, int indent,
+                          int key_width, int value_width, int unit_width,
+                          int show_serial, int show_cal_date, int show_cal_coeffs, int show_interval) {
+    char *indent_str = malloc(indent + 1);
+    memset(indent_str, ' ', indent);
+    indent_str[indent] = '\0';
+
+    /* Output board info fields if available and requested */
+    if (info) {
+        if (show_serial && info->serial[0] != '\0') {
+            printf("%sSerial Number: %s\n", indent_str, info->serial);
+        }
+        
+        if (show_cal_date && reading->channel < MCC134_NUM_CHANNELS && info->channels[reading->channel].cal_date[0] != '\0') {
+            printf("%sCalibration Date: %s\n", indent_str, info->channels[reading->channel].cal_date);
+        }
+        
+        if (show_cal_coeffs && reading->channel < MCC134_NUM_CHANNELS) {
+            CalibrationInfo *cal = &info->channels[reading->channel].cal_coeffs;
+            if (cal->slope != DEFAULT_CALIBRATION_SLOPE || cal->offset != DEFAULT_CALIBRATION_OFFSET) {
+                printf("%sCalibration Coefficients:\n", indent_str);
+                data_format_print_value(DATA_FORMATS[CALI_SLOPE_FORMAT].key,
+                                       cal->slope,
+                                       DATA_FORMATS[CALI_SLOPE_FORMAT].unit,
+                                       indent + 4, key_width, value_width, unit_width);
+                data_format_print_value(DATA_FORMATS[CALI_OFFSET_FORMAT].key,
+                                       cal->offset,
+                                       DATA_FORMATS[CALI_OFFSET_FORMAT].unit,
+                                       indent + 4, key_width, value_width, unit_width);
+            }
+        }
+        
+        if (show_interval && info->update_interval > 0 && info->update_interval != DEFAULT_UPDATE_INTERVAL) {
+            printf("%sUpdate Interval: %d seconds\n", indent_str, info->update_interval);
+        }
+    }
+    
+    /* Output dynamic readings */
+    if (reading->has_temp) {
+        data_format_print_value(DATA_FORMATS[TEMP_FORMAT].key,
+                               reading->temperature,
+                               DATA_FORMATS[TEMP_FORMAT].unit,
+                               indent, key_width, value_width, unit_width);
+    }
+    
+    if (reading->has_adc) {
+        data_format_print_value(DATA_FORMATS[ADC_FORMAT].key,
+                               reading->adc_voltage,
+                               DATA_FORMATS[ADC_FORMAT].unit,
+                               indent, key_width, value_width, unit_width);
+    }
+    
+    if (reading->has_cjc) {
+        data_format_print_value(DATA_FORMATS[CJC_FORMAT].key,
+                               reading->cjc_temp,
+                               DATA_FORMATS[CJC_FORMAT].unit,
+                               indent, key_width, value_width, unit_width);
+    }
+    
+    free(indent_str);
+}
+
 /* Format temperature value for display */
 char* format_temperature(double temp) {
     static char buffer[64];

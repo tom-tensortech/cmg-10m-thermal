@@ -103,7 +103,7 @@ int board_info_collect(BoardInfo *info, uint8_t address, uint8_t channel,
  * ============================================================================ */
 
 /* Collect data from multiple channels using new API */
-static int collect_channels_new(ThermalSource *sources, int source_count, CollectedData *out,
+static int collect_channels(ThermalSource *sources, int source_count, CollectedData *out,
                                 int get_serial, int get_cal_date, int get_cal_coeffs,
                                 int get_temp, int get_adc, int get_cjc, int get_interval,
                                 BoardManager *mgr_out) {
@@ -161,13 +161,16 @@ static int collect_channels_new(ThermalSource *sources, int source_count, Collec
 }
 
 /* Output collected data in JSON format */
-static void output_collected_json(const CollectedData *data, const ThermalSource *sources) {
-    cJSON *root = readings_to_json_array(data->readings, data->board_infos, sources, data->reading_count);
+static void output_collected_json(const CollectedData *data, const ThermalSource *sources,
+                                  int get_serial, int get_cal_date, int get_cal_coeffs, int get_interval) {
+    cJSON *root = readings_to_json_array(data->readings, data->board_infos, sources, data->reading_count,
+                                        get_serial, get_cal_date, get_cal_coeffs, get_interval);
     json_print_and_free(root, 0);
 }
 
 /* Output collected data in table format */
-static void output_collected_table(const CollectedData *data, const ThermalSource *sources, int clean_mode) {
+static void output_collected_table(const CollectedData *data, const ThermalSource *sources, int clean_mode,
+                                   int get_serial, int get_cal_date, int get_cal_coeffs, int get_interval) {
     if (data->reading_count == 1) {
         /* Single channel output */
         const ChannelReading *reading = &data->readings[0];
@@ -175,35 +178,14 @@ static void output_collected_table(const CollectedData *data, const ThermalSourc
         
         printf("(Address: %d, Channel: %d):\n", reading->address, reading->channel);
         
-        /* Output board info fields */
-        if (info->serial[0] != '\0') {
-            printf("  Serial Number: %s\n", info->serial);
-        }
-        if (sources[0].channel < MCC134_NUM_CHANNELS && info->channels[sources[0].channel].cal_date[0] != '\0') {
-            printf("  Calibration Date: %s\n", info->channels[sources[0].channel].cal_date);
-        }
-        if (sources[0].channel < MCC134_NUM_CHANNELS) {
-            CalibrationInfo *cal = &info->channels[sources[0].channel].cal_coeffs;
-            if (cal->slope != DEFAULT_CALIBRATION_SLOPE || cal->offset != DEFAULT_CALIBRATION_OFFSET) {
-                printf("  Calibration Coefficients:\n");
-                printf("      Slope:  %.6f\n", cal->slope);
-                printf("      Offset: %.6f\n", cal->offset);
-            }
-        }
-        if (info->update_interval > 0 && info->update_interval != DEFAULT_UPDATE_INTERVAL) {
-            printf("  Update Interval: %d seconds\n", info->update_interval);
-        }
+        /* Calculate formatting widths */
+        int max_key_len = 0, max_value_width = 0, max_unit_len = 0;
+        reading_format_calculate_max_width(data->readings, data->board_infos, sources, 1,
+                                          &max_key_len, &max_value_width, &max_unit_len);
         
-        /* Output dynamic readings */
-        if (reading->has_temp) {
-            printf("  Temperature: %.6f degC\n", reading->temperature);
-        }
-        if (reading->has_adc) {
-            printf("  ADC: %.6f V\n", reading->adc_voltage);
-        }
-        if (reading->has_cjc) {
-            printf("  CJC: %.6f degC\n", reading->cjc_temp);
-        }
+        /* Use formatting helper */
+        reading_format_output(reading, info, &sources[0], 4, max_key_len, max_value_width, max_unit_len,
+                             get_serial, get_cal_date, get_cal_coeffs, get_interval);
     } else {
         /* Multiple channels */
         int max_key_len = 0;
@@ -214,45 +196,32 @@ static void output_collected_table(const CollectedData *data, const ThermalSourc
             }
         }
         
+        /* Calculate formatting widths */
+        int max_value_width = 0, max_unit_len = 0, max_data_key_len = 0;
+        reading_format_calculate_max_width(data->readings, data->board_infos, sources,
+                                          data->reading_count, &max_data_key_len,
+                                          &max_value_width, &max_unit_len);
+
+        if (!clean_mode) {
+            printf("----------------------------------------\n");
+        }
+        
         for (int i = 0; i < data->reading_count; i++) {
             const ChannelReading *reading = &data->readings[i];
             const BoardInfo *info = &data->board_infos[sources[i].address];
             
             if (sources[i].key[0] != '\0') {
-                printf("%-*s (Address: %d, Channel: %d):\n", 
+                printf("%-*s (Address: %d, Channel: %d):\n",
                        max_key_len, sources[i].key, reading->address, reading->channel);
             } else {
                 printf("Address: %d, Channel: %d:\n", reading->address, reading->channel);
             }
             
-            /* Output board info fields */
-            if (info->serial[0] != '\0') {
-                printf("    Serial Number: %s\n", info->serial);
-            }
-            if (sources[i].channel < MCC134_NUM_CHANNELS && info->channels[sources[i].channel].cal_date[0] != '\0') {
-                printf("    Calibration Date: %s\n", info->channels[sources[i].channel].cal_date);
-            }
-            if (sources[i].channel < MCC134_NUM_CHANNELS) {
-                CalibrationInfo *cal = &info->channels[sources[i].channel].cal_coeffs;
-                if (cal->slope != DEFAULT_CALIBRATION_SLOPE || cal->offset != DEFAULT_CALIBRATION_OFFSET) {
-                    printf("    Calibration Coefficients:\n");
-                    printf("        Slope:  %.6f\n", cal->slope);
-                    printf("        Offset: %.6f\n", cal->offset);
-                }
-            }
-            if (info->update_interval > 0 && info->update_interval != DEFAULT_UPDATE_INTERVAL) {
-                printf("    Update Interval: %d seconds\n", info->update_interval);
-            }
-            
-            /* Output dynamic readings */
-            if (reading->has_temp) {
-                printf("    Temperature: %.6f degC\n", reading->temperature);
-            }
-            if (reading->has_adc) {
-                printf("    ADC: %.6f V\n", reading->adc_voltage);
-            }
-            if (reading->has_cjc) {
-                printf("    CJC: %.6f degC\n", reading->cjc_temp);
+            /* Use formatting helper */
+            reading_format_output(reading, info, &sources[i], 4, max_data_key_len, max_value_width, max_unit_len,
+                                 get_serial, get_cal_date, get_cal_coeffs, get_interval);
+            if (!clean_mode) {
+                printf("----------------------------------------\n");
             }
         }
     }
@@ -263,7 +232,7 @@ static void output_collected_table(const CollectedData *data, const ThermalSourc
  * ============================================================================ */
 
 /* Stream data from multiple channels using new API */
-static int stream_channels_new(ThermalSource *sources, int source_count,
+static int stream_channels(ThermalSource *sources, int source_count,
                                int get_serial, int get_cal_date, int get_cal_coeffs,
                                int get_temp, int get_adc, int get_cjc, int get_interval,
                                int stream_hz, int json_output, int clean_mode) {
@@ -304,42 +273,47 @@ static int stream_channels_new(ThermalSource *sources, int source_count,
                 for (int i = 0; i < source_count; i++) {
                     channel_reading_init(&static_readings[i], sources[i].address, sources[i].channel);
                 }
-                cJSON *root = readings_to_json_array(static_readings, board_infos, sources, source_count);
+                cJSON *root = readings_to_json_array(static_readings, board_infos, sources, source_count,
+                                                    get_serial, get_cal_date, get_cal_coeffs, get_interval);
                 json_print_and_free(root, 0);
                 free(static_readings);
             }
         } else {
+            /* Calculate formatting widths */
+            int max_data_key_len = 0, max_value_width = 0, max_unit_len = 0;
+            ChannelReading *temp_readings = calloc(source_count, sizeof(ChannelReading));
+            if (temp_readings) {
+                for (int i = 0; i < source_count; i++) {
+                    channel_reading_init(&temp_readings[i], sources[i].address, sources[i].channel);
+                }
+                reading_format_calculate_max_width(temp_readings, board_infos, sources, source_count,
+                                                  &max_data_key_len, &max_value_width, &max_unit_len);
+                free(temp_readings);
+            }
+
+            if (!clean_mode) {
+                printf("----------------------------------------\n");
+            }
+            
             /* Output static board info in table format */
             for (int i = 0; i < source_count; i++) {
                 const BoardInfo *info = &board_infos[sources[i].address];
+                ChannelReading temp_reading;
+                channel_reading_init(&temp_reading, sources[i].address, sources[i].channel);
                 
                 if (source_count > 1) {
                     if (sources[i].key[0] != '\0') {
-                        printf("%s (Address: %d, Channel: %d):\n", 
+                        printf("%s (Address: %d, Channel: %d):\n",
                                sources[i].key, sources[i].address, sources[i].channel);
                     } else {
-                        printf("Address: %d, Channel: %d:\n", 
+                        printf("Address: %d, Channel: %d:\n",
                                sources[i].address, sources[i].channel);
                     }
                 }
                 
-                if (info->serial[0] != '\0') {
-                    printf("  Serial Number: %s\n", info->serial);
-                }
-                if (sources[i].channel < MCC134_NUM_CHANNELS && info->channels[sources[i].channel].cal_date[0] != '\0') {
-                    printf("  Calibration Date: %s\n", info->channels[sources[i].channel].cal_date);
-                }
-                if (sources[i].channel < MCC134_NUM_CHANNELS) {
-                    CalibrationInfo *cal = &info->channels[sources[i].channel].cal_coeffs;
-                    if (cal->slope != DEFAULT_CALIBRATION_SLOPE || cal->offset != DEFAULT_CALIBRATION_OFFSET) {
-                        printf("  Calibration Coefficients:\n");
-                        printf("      Slope:  %.6f\n", cal->slope);
-                        printf("      Offset: %.6f\n", cal->offset);
-                    }
-                }
-                if (info->update_interval > 0 && info->update_interval != DEFAULT_UPDATE_INTERVAL) {
-                    printf("  Update Interval: %d seconds\n", info->update_interval);
-                }
+                /* Use formatting helper for static info only */
+                reading_format_output(&temp_reading, info, &sources[i], 4, max_data_key_len, max_value_width, max_unit_len,
+                                     get_serial, get_cal_date, get_cal_coeffs, get_interval);
             }
             
             if (clean_mode) {
@@ -353,10 +327,10 @@ static int stream_channels_new(ThermalSource *sources, int source_count,
     /* Print streaming info */
     if (!json_output && !clean_mode) {
         if (source_count == 1) {
-            printf("Streaming at %d Hz (Ctrl+C to stop)\n", stream_hz);
+            printf("Streaming at %d Hz\n", stream_hz);
             printf("----------------------------------------\n");
         } else {
-            printf("Streaming %d source%s at %d Hz (Ctrl+C to stop)\n",
+            printf("Streaming %d source%s at %d Hz\n",
                    source_count, source_count == 1 ? "" : "s", stream_hz);
             printf("========================================\n");
         }
@@ -382,20 +356,18 @@ static int stream_channels_new(ThermalSource *sources, int source_count,
         
         /* Output */
         if (json_output) {
-            cJSON *root = readings_to_json_array(readings, NULL, sources, source_count);
+            cJSON *root = readings_to_json_array(readings, NULL, sources, source_count, 0, 0, 0, 0);
             json_print_and_free(root, 0);
         } else {
             if (source_count == 1) {
-                const ChannelReading *reading = &readings[0];
-                if (reading->has_temp) {
-                    printf("  Temperature: %.6f degC\n", reading->temperature);
-                }
-                if (reading->has_adc) {
-                    printf("  ADC: %.6f V\n", reading->adc_voltage);
-                }
-                if (reading->has_cjc) {
-                    printf("  CJC: %.6f degC\n", reading->cjc_temp);
-                }
+                /* Calculate formatting widths for single reading */
+                int max_key_len = 0, max_value_width = 0, max_unit_len = 0;
+                reading_format_calculate_max_width(readings, NULL, sources, 1,
+                                                  &max_key_len, &max_value_width, &max_unit_len);
+                
+                /* Use formatting helper for dynamic data only */
+                reading_format_output(&readings[0], NULL, &sources[0], 4, max_key_len, max_value_width, max_unit_len,
+                                     0, 0, 0, 0);
                 if (!clean_mode) {
                     printf("----------------------------------------\n");
                 }
@@ -409,26 +381,25 @@ static int stream_channels_new(ThermalSource *sources, int source_count,
                     }
                 }
                 
+                /* Calculate formatting widths */
+                int max_data_key_len = 0, max_value_width = 0, max_unit_len = 0;
+                reading_format_calculate_max_width(readings, NULL, sources, source_count,
+                                                  &max_data_key_len, &max_value_width, &max_unit_len);
+                
                 for (int i = 0; i < source_count; i++) {
                     const ChannelReading *reading = &readings[i];
                     
                     if (sources[i].key[0] != '\0') {
-                        printf("%-*s (Address: %d, Channel: %d):\n", 
+                        printf("%-*s (Address: %d, Channel: %d):\n",
                                max_key_len, sources[i].key, reading->address, reading->channel);
                     } else {
-                        printf("Address: %d, Channel: %d:\n", 
+                        printf("Address: %d, Channel: %d:\n",
                                reading->address, reading->channel);
                     }
                     
-                    if (reading->has_temp) {
-                        printf("    Temperature: %.6f degC\n", reading->temperature);
-                    }
-                    if (reading->has_adc) {
-                        printf("    ADC: %.6f V\n", reading->adc_voltage);
-                    }
-                    if (reading->has_cjc) {
-                        printf("    CJC: %.6f degC\n", reading->cjc_temp);
-                    }
+                    /* Use formatting helper for dynamic data only */
+                    reading_format_output(reading, NULL, &sources[i], 4, max_data_key_len, max_value_width, max_unit_len,
+                                         0, 0, 0, 0);
                 }
                 
                 if (clean_mode) {
@@ -568,7 +539,7 @@ int cmd_get(int argc, char **argv) {
     
     if (stream_hz > 0) {
         /* Stream mode - use new API */
-        result = stream_channels_new(sources, source_count,
+        result = stream_channels(sources, source_count,
                                     get_serial, get_cal_date, get_cal_coeffs,
                                     get_temp, get_adc, get_cjc, get_interval,
                                     stream_hz, json_output, clean_mode);
@@ -577,15 +548,15 @@ int cmd_get(int argc, char **argv) {
         CollectedData data;
         BoardManager mgr;
         
-        if (collect_channels_new(sources, source_count, &data,
+        if (collect_channels(sources, source_count, &data,
                                 get_serial, get_cal_date, get_cal_coeffs,
                                 get_temp, get_adc, get_cjc, get_interval,
                                 &mgr) == THERMO_SUCCESS) {
             DEBUG_PRINT("Data collection complete.");
             if (json_output) {
-                output_collected_json(&data, sources);
+                output_collected_json(&data, sources, get_serial, get_cal_date, get_cal_coeffs, get_interval);
             } else {
-                output_collected_table(&data, sources, clean_mode);
+                output_collected_table(&data, sources, clean_mode, get_serial, get_cal_date, get_cal_coeffs, get_interval);
             }
             collected_data_free(&data);
         } else {

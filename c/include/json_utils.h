@@ -24,10 +24,12 @@ cJSON* reading_to_json(const ChannelReading *reading);
  * ============================================================================ */
 
 /* Add board info fields to existing cJSON object */
-void board_info_add_to_json(cJSON *obj, const BoardInfo *info, int channel);
+void board_info_add_to_json(cJSON *obj, const BoardInfo *info, int channel,
+                           int show_serial, int show_cal_date, int show_cal_coeffs, int show_interval);
 
 /* Convert BoardInfo to cJSON object for a specific channel */
-cJSON* board_info_to_json(const BoardInfo *info, int channel);
+cJSON* board_info_to_json(const BoardInfo *info, int channel,
+                         int show_serial, int show_cal_date, int show_cal_coeffs, int show_interval);
 
 /* ============================================================================
  * Combined JSON functions (ChannelReading + BoardInfo)
@@ -36,13 +38,15 @@ cJSON* board_info_to_json(const BoardInfo *info, int channel);
 /* Convert ChannelReading + BoardInfo to combined JSON */
 cJSON* reading_with_info_to_json(const ChannelReading *reading,
                                   const BoardInfo *info,
-                                  const char *key);
+                                  const char *key,
+                                  int show_serial, int show_cal_date, int show_cal_coeffs, int show_interval);
 
 /* Convert array of ChannelReadings to JSON array with BoardInfo */
 cJSON* readings_to_json_array(const ChannelReading *readings,
                                const BoardInfo *infos,
                                const ThermalSource *sources,
-                               int count);
+                               int count,
+                               int show_serial, int show_cal_date, int show_cal_coeffs, int show_interval);
 
 /* ============================================================================
  * Output utilities

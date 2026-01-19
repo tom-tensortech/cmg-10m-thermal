@@ -73,9 +73,20 @@ extern const DataFormat DATA_FORMATS[5];
 
 /* Data formatting functions */
 int count_digits_before_decimal(double value);
-void data_format_calculate_max_width(const ThermoData *data_array, int count, int *max_key_len, int *max_value_len, int *max_unit_len);
 void data_format_print_value(const char *label, double value, const char *unit, int indent, int key_width, int value_width, int unit_width);
+
+/* Legacy ThermoData formatting (for bridge.c compatibility) */
+void data_format_calculate_max_width(const ThermoData *data_array, int count, int *max_key_len, int *max_value_len, int *max_unit_len);
 void data_format_output(const ThermoData *data, int indent, int key_width, int value_width, int unit_width);
+
+/* New ChannelReading/BoardInfo formatting functions */
+void reading_format_calculate_max_width(const ChannelReading *readings, const BoardInfo *board_infos, 
+                                        const ThermalSource *sources, int count,
+                                        int *max_key_len, int *max_value_width, int *max_unit_len);
+void reading_format_output(const ChannelReading *reading, const BoardInfo *info, 
+                          const ThermalSource *source, int indent,
+                          int key_width, int value_width, int unit_width,
+                          int show_serial, int show_cal_date, int show_cal_coeffs, int show_interval);
 
 /* Table structure for formatted output */
 typedef struct {

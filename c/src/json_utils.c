@@ -37,19 +37,20 @@ cJSON* reading_to_json(const ChannelReading *reading) {
  * BoardInfo JSON functions
  * ============================================================================ */
 
-void board_info_add_to_json(cJSON *obj, const BoardInfo *info, int channel) {
-    /* BoardInfo always has serial if populated */
-    if (info->serial[0] != '\0') {
+void board_info_add_to_json(cJSON *obj, const BoardInfo *info, int channel,
+                           int show_serial, int show_cal_date, int show_cal_coeffs, int show_interval) {
+    /* BoardInfo serial if populated and requested */
+    if (show_serial && info->serial[0] != '\0') {
         cJSON_AddStringToObject(obj, "SERIAL", info->serial);
     }
     
-    /* Add per-channel calibration data */
-    if (channel >= 0 && channel < MCC134_NUM_CHANNELS) {
+    /* Add per-channel calibration data if requested */
+    if ((show_cal_date || show_cal_coeffs) && channel >= 0 && channel < MCC134_NUM_CHANNELS) {
         const ChannelConfig *ch = &info->channels[channel];
         
         /* Check if calibration data exists */
-        int has_cal_date = (ch->cal_date[0] != '\0');
-        int has_cal_coeffs = (ch->cal_coeffs.slope != 0.0 || ch->cal_coeffs.offset != 0.0);
+        int has_cal_date = show_cal_date && (ch->cal_date[0] != '\0');
+        int has_cal_coeffs = show_cal_coeffs && (ch->cal_coeffs.slope != 0.0 || ch->cal_coeffs.offset != 0.0);
         
         if (has_cal_date || has_cal_coeffs) {
             cJSON *cal = cJSON_AddObjectToObject(obj, "CALIBRATION");
@@ -63,19 +64,20 @@ void board_info_add_to_json(cJSON *obj, const BoardInfo *info, int channel) {
         }
     }
     
-    /* Add update interval if non-zero */
-    if (info->update_interval > 0) {
+    /* Add update interval if non-zero and requested */
+    if (show_interval && info->update_interval > 0) {
         cJSON_AddNumberToObject(obj, "UPDATE_INTERVAL", info->update_interval);
     }
 }
 
-cJSON* board_info_to_json(const BoardInfo *info, int channel) {
+cJSON* board_info_to_json(const BoardInfo *info, int channel,
+                         int show_serial, int show_cal_date, int show_cal_coeffs, int show_interval) {
     cJSON *obj = cJSON_CreateObject();
     cJSON_AddNumberToObject(obj, "ADDRESS", info->address);
     if (channel >= 0) {
         cJSON_AddNumberToObject(obj, "CHANNEL", channel);
     }
-    board_info_add_to_json(obj, info, channel);
+    board_info_add_to_json(obj, info, channel, show_serial, show_cal_date, show_cal_coeffs, show_interval);
     return obj;
 }
 
@@ -85,7 +87,8 @@ cJSON* board_info_to_json(const BoardInfo *info, int channel) {
 
 cJSON* reading_with_info_to_json(const ChannelReading *reading,
                                   const BoardInfo *info,
-                                  const char *key) {
+                                  const char *key,
+                                  int show_serial, int show_cal_date, int show_cal_coeffs, int show_interval) {
     cJSON *obj = cJSON_CreateObject();
     
     if (key && key[0] != '\0') {
@@ -95,9 +98,9 @@ cJSON* reading_with_info_to_json(const ChannelReading *reading,
     cJSON_AddNumberToObject(obj, "ADDRESS", reading->address);
     cJSON_AddNumberToObject(obj, "CHANNEL", reading->channel);
     
-    /* Add board info fields */
+    /* Add board info fields if requested */
     if (info) {
-        board_info_add_to_json(obj, info, reading->channel);
+        board_info_add_to_json(obj, info, reading->channel, show_serial, show_cal_date, show_cal_coeffs, show_interval);
     }
     
     /* Add reading fields */
@@ -109,12 +112,13 @@ cJSON* reading_with_info_to_json(const ChannelReading *reading,
 cJSON* readings_to_json_array(const ChannelReading *readings,
                                const BoardInfo *infos,
                                const ThermalSource *sources,
-                               int count) {
+                               int count,
+                               int show_serial, int show_cal_date, int show_cal_coeffs, int show_interval) {
     if (count == 1) {
         /* Single channel - output flat object */
         const char *key = (sources && sources[0].key[0] != '\0') ? sources[0].key : NULL;
         const BoardInfo *info = infos ? &infos[sources[0].address] : NULL;
-        return reading_with_info_to_json(&readings[0], info, key);
+        return reading_with_info_to_json(&readings[0], info, key, show_serial, show_cal_date, show_cal_coeffs, show_interval);
     }
     
     /* Multiple channels - output array */
@@ -122,7 +126,7 @@ cJSON* readings_to_json_array(const ChannelReading *readings,
     for (int i = 0; i < count; i++) {
         const char *key = (sources && sources[i].key[0] != '\0') ? sources[i].key : NULL;
         const BoardInfo *info = infos ? &infos[sources[i].address] : NULL;
-        cJSON *item = reading_with_info_to_json(&readings[i], info, key);
+        cJSON *item = reading_with_info_to_json(&readings[i], info, key, show_serial, show_cal_date, show_cal_coeffs, show_interval);
         cJSON_AddItemToArray(arr, item);
     }
     return arr;
