@@ -124,7 +124,10 @@ static void print_command_help(const char *cmd_name) {
         printf("  -C, --config FILE      Path to YAML/JSON config file\n");
         printf("  -a, --address NUM      Single mode: Board address\n");
         printf("  -c, --channel NUM      Single mode: Channel index\n");
-        printf("  -k, --key NAME         Single mode: JSON key to inject [default: TEMP_FUSED]\n\n");
+        printf("  -k, --key NAME         Single mode: JSON key to inject [default: TEMP_FUSED]\n");
+        printf("  -t, --tc-type TYPE     Thermocouple type (default: K)\n");
+        printf("  -T, --time-format FMT  Timestamp format (default: %%Y-%%m-%%dT%%H:%%M:%%S.%%f)\n");
+        printf("                         Use %%f for 6-digit microseconds\n");
         printf("Examples:\n");
         printf("  thermo-cli fuse --address 0 --channel 1 --key MY_TEMP -- --power --json\n");
         printf("  thermo-cli fuse --config config.yaml -- --actuator --stream 5 --json\n");
