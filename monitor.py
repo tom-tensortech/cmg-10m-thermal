@@ -5,12 +5,14 @@ import typer
 import os
 import subprocess
 import time
-import json
 import select
 import atexit
-from pathlib import Path
 
+import math
+import json
+from pathlib import Path
 from collections import deque
+
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 
@@ -45,17 +47,19 @@ KEYS_TO_CHECK_STEADY = [
 
 
 class Logger:
-    def __init__(self, name: str, log_append: bool = False):
+    def __init__(self, name: str, output_append: bool = False):
         output_dir = Path("output") / name
         if not output_dir.exists():
             output_dir.mkdir(parents=True, exist_ok=True)
         
-        log_path = output_dir / "data.csv"
+        log_path = output_dir / "log.txt"
+        output_path = output_dir / "data.csv"
         meta_path = output_dir / "meta.toml"
 
-        self.log_file = open(log_path, "a" if log_append else "w")
         self.meta_file = open(meta_path, "w")
-        self.log_append = log_append
+        self.log_file = open(log_path, "w")
+        self.output_file = open(output_path, "a" if output_append else "w")
+        self.output_append = output_append
     
     def write_meta(self, meta: dict):
         for key, value in meta.items():
@@ -63,19 +67,19 @@ class Logger:
         self.meta_file.flush()
     
     def log_columns(self, columns: dict):
-        if not self.log_append:
-            self.log_file.write(",".join(columns.keys()) + "\n")
+        if not self.output_append:
+            self.output_file.write(",".join(columns.keys()) + "\n")
     
     def log_row(self, row: dict):
-        self.log_file.write(",".join(str(row[col]) for col in row.keys()) + "\n")
-        self.log_file.flush()
+        self.output_file.write(",".join(str(row[col]) for col in row.keys()) + "\n")
+        self.output_file.flush()
 
-        print(f"Timestamp: {row['TIME']}")
+        self.log_file.write(f"Timestamp: {row['TIME']}\n")
         for key in row.keys():
             if key != "TIME":
-                print(f"  {key}: {row[key]}")
-        print()
-
+                self.log_file.write(f"  {key}: {row[key]}\n")
+        self.log_file.write("\n")
+        self.log_file.flush()
 
 class Reader:
     def __init__(self):
@@ -149,11 +153,14 @@ class Device:
         self.steady_check_every = steady_check_every
 
         self.steady_history = {key: deque() for key in KEYS_TO_CHECK_STEADY}
-        self.last_steady_check = {key: None for key in KEYS_TO_CHECK_STEADY}
+        self.steady_last_check = {key: None for key in KEYS_TO_CHECK_STEADY}
+
+        self.init_steady_history = {key: deque() for key in KEYS_TO_CHECK_STEADY}
+        self.init_steady_last_check = {key: None for key in KEYS_TO_CHECK_STEADY}
 
     def wheel_on(self, speed: float, gimbal: float = 45):
         print(
-            f"Turning on the wheel with speed {speed} Hz and gimbal angle {gimbal} degrees..."
+            f"Turning on the wheel with speed {speed} Hz and gimbal angle {gimbal} degrees...\n"
         )
         command = WHEEL_ON_COMMAND + [f"{speed},{gimbal}"]
         subprocess.run(command, check=True)
@@ -164,7 +171,13 @@ class Device:
                 return False
         return True
 
+    def check_init_steady(self, row: dict) -> bool:
+        return self._check_steady(row, self.init_steady_history, self.init_steady_last_check)
+    
     def check_steady(self, row: dict) -> bool:
+        return self._check_steady(row, self.steady_history, self.steady_last_check)
+
+    def _check_steady(self, row: dict, steady_history: dict, steady_last_check: dict) -> bool:
         if (
             self.steady_window is None
             or self.steady_threshold is None
@@ -176,8 +189,9 @@ class Device:
         time = row["TIME"]
         steady = {key: False for key in KEYS_TO_CHECK_STEADY}
 
+        has_checked = False
         for key in KEYS_TO_CHECK_STEADY:
-            history = self.steady_history[key]
+            history = steady_history[key]
             temp = row[key]
             time = row["TIME"]
 
@@ -185,21 +199,31 @@ class Device:
             
             last_entry = history[-1]
             if (
-                (self.last_steady_check[key] is not None and time - self.last_steady_check[key] < self.steady_check_every) or
+                (steady_last_check[key] is not None and time - steady_last_check[key] < self.steady_check_every) or
                 last_entry[0] - history[0][0] < self.steady_check_every
             ):
                 continue
             
+            has_checked = True
+            
             data = [t for _, t in history]
             filtered = gaussian_filter1d(data, sigma=self.steady_sigma)
             std = np.std(filtered)
-            print(f"Steady check for {key}: std = {std:.4f} °C over last {last_entry[0] - history[0][0]:.2f} seconds")
-            if std < self.steady_threshold:
-                steady[key] = True
+            print(f"Steady check for {key}: std = {std:.4f} °C over last {last_entry[0] - history[0][0]:.2f} seconds", end="")
 
-            self.last_steady_check[key] = time
+            if std < self.steady_threshold:
+                print(" -> STEADY")
+                steady[key] = True
+            else:
+                print(" -> NOT STEADY")
+                steady[key] = False
+
+            steady_last_check[key] = time
             while last_entry[0] - history[0][0] >= self.steady_window:
                 history.popleft()
+        
+        if has_checked:
+            print()
 
         return all(steady.values())
 
@@ -220,40 +244,21 @@ class Device:
             print("Device terminated.")
 
 
-def main(
-    name: str = typer.Argument(..., help="Experiment name"),
-    append: bool = typer.Option(
-        False, help="Append to the output file if it exists"
-    ),
-    speed: Optional[float] = typer.Option(
-        None, help="Wheel speed to turn on the device (Hz)"
-    ),
-    gimbal: Optional[float] = typer.Option(
-        None, help="Gimbal angle to set when turning on the wheel (degrees)"
-    ),
-    threshold: float = typer.Option(
-        70.0, help="Temperature threshold to stop the test (°C)"
-    ),
-    time_limit: int = typer.Option(
-        3600, help="Time limit for the steady test in seconds"
-    ),
-    defer_start: Optional[int] = typer.Option(
-        None, help="Defer motor activation and steady state checking for this many seconds after start (included in time limit)"
-    ),
-    steady_window: Optional[int] = typer.Option(
-        None, help="Time window to check for steadiness in seconds"
-    ),
-    steady_sigma: Optional[float] = typer.Option(
-        None, help="Sigma for Gaussian smoothing when checking for steadiness"
-    ),
-    steady_threshold: Optional[float] = typer.Option(
-        None, help="Maximum allowed variation in temperature for steadiness (°C)"
-    ),
-    steady_check_every: Optional[int] = typer.Option(
-        None, help="Interval to check for steadiness in seconds"
-    ),
+def run_experiment(
+    name: str,
+    append: bool,
+    threshold: float,
+    time_limit: int,
+    speed: Optional[float] = None,
+    gimbal: Optional[float] = None,
+    defer_start: Optional[int] = None,
+    check_init_steady: bool = False,
+    steady_window: Optional[int] = None,
+    steady_sigma: Optional[float] = None,
+    steady_threshold: Optional[float] = None,
+    steady_check_every: Optional[int] = None,
 ):
-    logger = Logger(name, log_append=append)
+    logger = Logger(name, output_append=append)
     logger.write_meta(
         {
             "speed": speed if speed is not None else "null",
@@ -261,6 +266,7 @@ def main(
             "threshold": threshold,
             "time_limit": time_limit,
             "defer_start": defer_start if defer_start is not None else "null",
+            "check_init_steady": check_init_steady,
             "steady_window": steady_window if steady_window is not None else "null",
             "steady_sigma": steady_sigma if steady_sigma is not None else "null",
             "steady_threshold": steady_threshold if steady_threshold is not None else "null",
@@ -324,6 +330,16 @@ def main(
             if defer_start is not None and elapsed_time < defer_start:
                 continue
             
+            if check_init_steady:
+                if device.check_init_steady(row):
+                    print(
+                        f"Initial steady state achieved within {steady_window} seconds "
+                        + f"with variation less than {steady_threshold} °C.\n"
+                    )
+                    check_init_steady = False
+                else:
+                    continue
+            
             if not motor_activated:
                 if speed is not None or gimbal is not None:
                     assert (
@@ -345,6 +361,65 @@ def main(
         print(e)
     
     device.terminate()
+
+
+def main(
+    name: str = typer.Argument(..., help="Experiment name"),
+    append: bool = typer.Option(
+        False, help="Append to the output file if it exists"
+    ),
+    speeds: Optional[str] = typer.Option(
+        None, help="Comma-separated list of wheel speeds to test (Hz)."
+    ),
+    gimbal: Optional[float] = typer.Option(
+        None, help="Gimbal angle to set when turning on the wheel (degrees)"
+    ),
+    threshold: float = typer.Option(
+        70.0, help="Temperature threshold to stop the test (°C)"
+    ),
+    time_limit: int = typer.Option(
+        3600, help="Time limit for the steady test in seconds"
+    ),
+    defer_start: Optional[int] = typer.Option(
+        None, help="Defer motor activation and steady state checking for this many seconds after start (included in time limit)"
+    ),
+    check_init_steady: bool = typer.Option(
+        False, help="Check for initial steady state before activating motor"
+    ),
+    steady_window: Optional[int] = typer.Option(
+        None, help="Time window to check for steadiness in seconds"
+    ),
+    steady_sigma: Optional[float] = typer.Option(
+        None, help="Sigma for Gaussian smoothing when checking for steadiness"
+    ),
+    steady_threshold: Optional[float] = typer.Option(
+        None, help="Maximum allowed variation in temperature for steadiness (°C)"
+    ),
+    steady_check_every: Optional[int] = typer.Option(
+        None, help="Interval to check for steadiness in seconds"
+    ),
+):
+    if speeds is None:
+        speeds = [None]
+    else:
+        speeds = [float(s) for s in speeds.split(",")]
+
+    for speed in speeds:
+        rpm = math.ceil(speed * 60) if speed is not None else "no_wheel"
+        run_experiment(
+            name=f"{name}_rpm{rpm}",
+            append=append,
+            threshold=threshold,
+            time_limit=time_limit,
+            speed=speed,
+            gimbal=gimbal,
+            defer_start=defer_start,
+            check_init_steady=check_init_steady,
+            steady_window=steady_window,
+            steady_sigma=steady_sigma,
+            steady_threshold=steady_threshold,
+            steady_check_every=steady_check_every,
+        )
 
 
 if __name__ == "__main__":
