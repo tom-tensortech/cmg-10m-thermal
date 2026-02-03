@@ -1,8 +1,8 @@
-from typing import Generator, Optional
+from typing import Generator, Optional, NamedTuple
 
 import typer
 
-import os
+import traceback
 import subprocess
 import time
 import select
@@ -24,6 +24,7 @@ READ_COMMAND = [
     "thermo_config.yaml",
     "--",
     "--power",
+    "--control",
     "-s",
     "1",
 ]
@@ -36,13 +37,13 @@ KEYS_TO_CHECK_THRESHOLD = [
     "THERMO_X_TEMP",
     "THERMO_Z_TEMP",
     "THERMO_SP_TEMP",
-    "THERMO_NSP_TEMP",
+    "THERMO_PLATE_TEMP",
 ]
 KEYS_TO_CHECK_STEADY = [
     "THERMO_X_TEMP",
     "THERMO_Z_TEMP",
     "THERMO_SP_TEMP",
-    "THERMO_NSP_TEMP",
+    "THERMO_PLATE_TEMP",
 ]
 
 
@@ -86,7 +87,7 @@ class Reader:
         self.columns = None
         self.lines = 0
 
-    def timestamp_to_seconds(self, ts: str) -> float:
+    def __timestamp_to_seconds(self, ts: str) -> float:
         # Format: YEAR-MONTH-DAYTHOUR:MINUTE:SECOND.MICROSECOND
         date, time = ts.split("T")
         year, month, day = map(int, date.split("-"))
@@ -99,11 +100,11 @@ class Reader:
         )
         return total_seconds
 
-    def parse(self, line: str) -> dict:
+    def __parse(self, line: str) -> dict:
         data = json.loads(line)
 
         row = {}
-        row["TIME"] = self.timestamp_to_seconds(data["TIMESTAMP"])
+        row["TIME"] = self.__timestamp_to_seconds(data["TIMESTAMP"])
 
         power = data["POWER"]
         for key, value in power.items():
@@ -115,8 +116,8 @@ class Reader:
                 row[f"THERMO_{pos}_{key}"] = value
 
         return row
-        
-    def read(self) -> Generator[tuple[int, dict], None, None]:
+    
+    def __open_proc(self) -> subprocess.Popen:
         proc = subprocess.Popen(
             READ_COMMAND, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
@@ -126,14 +127,25 @@ class Reader:
             for line in proc.stderr:
                 err_msgs.append(line.strip())
             raise RuntimeError("Failed to start thermo-cli: \n" + "\n".join(err_msgs))
-
-        for line in proc.stdout:
-            row = self.parse(line)
-            yield self.lines, row
-            self.lines += 1
-
+    
+        return proc
+        
+    def read(self) -> Generator[tuple[int, dict], None, None]:
+        while True:
+            proc = self.__open_proc()
+            for line in proc.stdout:
+                row = self.__parse(line)
+                yield self.lines, row
+                self.lines += 1
+            
+            # Unexpected termination, restart
+            proc.terminate()
+            proc.wait()
+            print("thermo-cli terminated unexpectedly. Restarting...")
 
 class Device:
+    SteadyEntry = NamedTuple("SteadyEntry", [("time", float), ("value", float)])
+
     def __init__(
         self,
         threshold: float,
@@ -143,8 +155,6 @@ class Device:
         steady_check_every: Optional[int] = None,
     ):
         self.terminated = False
-        atexit.register(self.terminate)
-
         self.threshold = threshold
 
         self.steady_window = steady_window
@@ -177,7 +187,7 @@ class Device:
     def check_steady(self, row: dict) -> bool:
         return self._check_steady(row, self.steady_history, self.steady_last_check)
 
-    def _check_steady(self, row: dict, steady_history: dict, steady_last_check: dict) -> bool:
+    def _check_steady(self, row: dict[str, float], steady_history: dict[str, deque[SteadyEntry]], steady_last_check: dict[str, float]) -> bool:
         if (
             self.steady_window is None
             or self.steady_threshold is None
@@ -195,21 +205,31 @@ class Device:
             temp = row[key]
             time = row["TIME"]
 
-            history.append((time, temp))  # (time, value)
+            history.append(self.SteadyEntry(time, temp))  # (time, value)
             
             last_entry = history[-1]
+            first_entry = history[0]
             if (
-                (steady_last_check[key] is not None and time - steady_last_check[key] < self.steady_check_every) or
-                last_entry[0] - history[0][0] < self.steady_check_every
+                (steady_last_check[key] is not None and last_entry.time - steady_last_check[key] < self.steady_check_every) or
+                last_entry.time - first_entry.time < self.steady_check_every
             ):
                 continue
+
+            steady_last_check[key] = last_entry.time
+            if last_entry.time - first_entry.time < self.steady_window:
+                continue
+
+            # Clean up old entries
+            while last_entry.time - history[0].time >= self.steady_window:
+                history.popleft()
             
+            first_entry = history[0]
             has_checked = True
             
-            data = [t for _, t in history]
+            data = [e.value for e in history]
             filtered = gaussian_filter1d(data, sigma=self.steady_sigma)
             std = np.std(filtered)
-            print(f"Steady check for {key}: std = {std:.4f} °C over last {last_entry[0] - history[0][0]:.2f} seconds", end="")
+            print(f"Steady check for {key}: std = {std:.4f} °C over last {last_entry.time - first_entry.time:.2f} seconds", end="")
 
             if std < self.steady_threshold:
                 print(" -> STEADY")
@@ -217,10 +237,6 @@ class Device:
             else:
                 print(" -> NOT STEADY")
                 steady[key] = False
-
-            steady_last_check[key] = time
-            while last_entry[0] - history[0][0] >= self.steady_window:
-                history.popleft()
         
         if has_checked:
             print()
@@ -282,6 +298,9 @@ def run_experiment(
         steady_threshold=steady_threshold,
         steady_check_every=steady_check_every,
     )
+    
+    # Register termination at interrupt
+    atexit.register(device.terminate)
 
     print("Starting monitoring...")
     if threshold is not None:
@@ -307,6 +326,10 @@ def run_experiment(
         motor_activated = False
 
         for i, row in reader.read():
+            # Check abnormal temperatures (negative values)
+            if any(row[key] < 0.0 for key in KEYS_TO_CHECK_THRESHOLD):
+                continue
+            
             if i == 0:
                 logger.log_columns(row)
             logger.log_row(row)
@@ -358,9 +381,13 @@ def run_experiment(
                 break
 
     except Exception as e:
-        print(e)
+        # traceback
+        traceback.print_exc()
     
     device.terminate()
+    
+    # Remove termination at exit
+    atexit.unregister(device.terminate)
 
 
 def main(
@@ -405,9 +432,13 @@ def main(
         speeds = [float(s) for s in speeds.split(",")]
 
     for speed in speeds:
-        rpm = math.ceil(speed * 60) if speed is not None else "no_wheel"
+        if speed is not None:
+            rpm = math.ceil(speed * 60)
+            exp_name = f"{name}_rpm{rpm}"
+        else:
+            exp_name = name
         run_experiment(
-            name=f"{name}_rpm{rpm}",
+            name=exp_name,
             append=append,
             threshold=threshold,
             time_limit=time_limit,
